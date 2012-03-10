@@ -7,7 +7,7 @@ CLIENT_SECRET="YOUR_CLIENT_SECRET"
 
 """ TODO.TXT Google Task Sync
 USAGE:  
-	google [pull|push|push all]
+	google [pull|push|push all|pushd [num]]
 	
 CONFIGURATION:
 	-Create a project in the Google APIs Console (http://code.google.com/apis/console).
@@ -47,6 +47,7 @@ from oauth2client.file import Storage
 from oauth2client.client import OAuth2WebServerFlow
 from oauth2client.tools import run
 from subprocess import call
+from urlparse import urlparse
 
 __version__ = "0.1"
 __date__ = "2011/06/06"
@@ -68,7 +69,7 @@ FLOW = OAuth2WebServerFlow(
 
 def usage():
     """Prints progam usage"""
-    print "USAGE: %s [pull|push|push all]"% (sys.argv[1], )
+    print "USAGE: %s [pull|push|push all|pushd [num]]"% (sys.argv[1], )
 
 
 def getAPIService():
@@ -80,7 +81,23 @@ def getAPIService():
          credentials = run(FLOW, storage)
 
     # httplib2.Http object to handle our HTTP requests authorized with Credentials.
-    http = httplib2.Http()
+    try:
+        proxy = os.environ['http_proxy']
+    except:
+        proxy = None
+    if proxy == None:
+        http = httplib2.Http(disable_ssl_certificate_validation=True)
+    else:
+        p = urlparse(proxy)
+        if p.port != None:
+            serv_port = p.netloc.split(":")
+            serv = serv_port[0]
+            port = int(serv_port[1])
+        else:
+            port = 80
+            serv = p.netloc 
+        http = httplib2.Http(proxy_info=httplib2.ProxyInfo(socks.PROXY_TYPE_HTTP, serv,port),disable_ssl_certificate_validation=True)
+
     http = credentials.authorize(http)
 
     # Build a service object for interacting with the API. 
@@ -199,19 +216,24 @@ def pull():
                     addToDone(task)
 
 
-def push(filename):
+def push(filename,last=10):
     """Get items from todo.txt and adds them to google tasks via API"""
     service = getAPIService()
     tasklists = service.tasklists().list().execute()
     call([os.environ.get("TODO_FULL_SH"),"archive"])
 
     try:
-        todoFile = open(os.environ.get("TODO_DIR")+"/"+filename+".txt", "r")
-    
+        todoFile = None 
         todos = []
-        for line in todoFile:
-            todos.append(line)
-        todoFile.close()
+        if filename == "done":
+            todoFile = open(os.environ.get("TODO_DIR")+"/"+filename+".txt",'rb')
+            todos = tail(todoFile,last)
+            todoFile.close()
+        else:
+            todoFile = open(os.environ.get("TODO_DIR")+"/"+filename+".txt", "r")
+            for line in todoFile:
+                todos.append(line)
+            todoFile.close()
 
     except IOError:
         print "ERROR: The " + filename + ".txt files could not be read."
@@ -253,9 +275,33 @@ def main(argv):
         print "Pushing all to Google Tasks"
         push("todo")
         push("done")
+    elif argv[1].lower()=="pushd" and len(argv)<3:
+        print "Pushing done to Google Tasks"
+        push("done")
+    elif argv[1].lower()=="pushd" and len(argv) == 3:
+        print "Pushing done by numbers to Google Tasks"
+        try:
+            n = int(argv[2])
+        except ValueError:
+            print "Please correct the number you want."
+            sys.exit(2)
+        push("done",n)
     else:
         usage()
 
+def tail(f, lines_2find=1):  
+        f.seek(0, 2)                         #go to end of file
+        bytes_in_file = f.tell()             
+        lines_found, total_bytes_scanned = 0, 0
+        while (lines_2find+1 > lines_found and
+               bytes_in_file > total_bytes_scanned): 
+            byte_block = min(1024, bytes_in_file-total_bytes_scanned)
+            f.seek(-(byte_block+total_bytes_scanned), 2)
+            total_bytes_scanned += byte_block
+            lines_found += f.read(1024).count('\n')
+        f.seek(-total_bytes_scanned, 2)
+        line_list = list(f.readlines())
+        return line_list[-lines_2find:]
 
 if __name__ == "__main__":
     main(sys.argv[1:])
